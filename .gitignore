@@ -1,0 +1,10 @@
+# Landing zone and derived files stay out of git
+inbox/
+build/
+
+# Operating system and Python leftovers
+.DS_Store
+._*
+__pycache__/
+*.pyc
+.venv/
