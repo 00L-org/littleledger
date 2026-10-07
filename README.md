@@ -2,11 +2,11 @@
 
 A personal finance archive that an AI assistant keeps in order with you: statements and documents in one local folder, named, checked and versioned; one table of all transactions; deadlines and open matters that come back on time; and a memory that lasts between sessions and across AI tools.
 
-Deutsch: Ordner in Claude Code, Claude Desktop oder Codex öffnen und „Start" sagen. Die KI erklärt alles und richtet das Archiv im Gespräch ein.
+Deutsch: Ordner in Claude Code/Desktop, Codex o.ä. öffnen und Session starten („Start" reicht). Die KI erklärt alles und richtet das Archiv im Gespräch ein.
 
 ## Start
-1. Download or clone this folder and open it in an AI tool that works with files: Claude Code, Claude Desktop (Cowork) or Codex.
-2. Say "start". The assistant explains the archive, asks a few questions and sets everything up, git included.
+1. Download or clone this folder and open it in an AI tool that works with files (Claude Code/Desktop, Codex, ...).
+2. Start session ("start" is sufficient). The assistant explains the archive, asks a few questions and sets everything up, git included.
 3. From then on: put new files into `inbox/` and say "start".
 
 Needs Python 3.9 or newer and git; `pdftotext` (poppler) for PDF statements.
