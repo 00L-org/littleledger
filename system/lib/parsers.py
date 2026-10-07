@@ -77,7 +77,7 @@ def parse_haspa_text(txt: str, account: str, source: str):
     return rows, check
 
 
-def parse_haspa_statement(pdf: Path, account: str, source: str):
+def parse_haspa_statement(pdf: Path, account: str, source: str, ids=()):
     return parse_haspa_text(pdftext(pdf), account, source)
 
 
@@ -121,17 +121,36 @@ def parse_haspa_card_text(txt: str, account: str, source: str):
     return rows, check
 
 
-def parse_haspa_card(pdf: Path, account: str, source: str):
+def parse_haspa_card(pdf: Path, account: str, source: str, ids=()):
     return parse_haspa_card_text(pdftext(pdf), account, source)
 
 
 # ----------------------------------------------------------------- camt.052/053
-def parse_camt(xml: Path, account: str, source: str):
+def parse_camt(xml: Path, account: str, source: str, ids=()):
+    """Every report in the file must belong to the account (its IBAN among ids) and balance."""
     root = ET.parse(xml).getroot()
     q = {"d": root.tag.split("}")[0].strip("{")}
-    report = root.find(".//d:Rpt", q)
-    if report is None:
-        report = root.find(".//d:Stmt", q)
+    reports = root.findall(".//d:Rpt", q) or root.findall(".//d:Stmt", q)
+    rows, checks = [], []
+    for report in reports:
+        found, check = camt_report(report, q, account, source)
+        iban = report.find("d:Acct/d:Id/d:IBAN", q)
+        number = re.sub(r"\D", "", iban.text if iban is not None and iban.text else "")
+        if ids and not (number and any(i.endswith(number) for i in ids)):
+            check.update(ok=False, note=f"IBAN {iban.text if iban is not None else '?'} is not this account's")
+        rows += found
+        checks.append(check)
+    if not checks:
+        return [], {"file": xml.name, "n": 0, "ok": False, "note": "no camt report found"}
+    if len(checks) == 1:
+        return rows, {**checks[0], "file": xml.name}
+    failed = [c for c in checks if not c["ok"]]
+    return rows, {"file": xml.name, "n": len(rows), "ok": not failed,
+                  "note": f"{len(checks)} reports" + (f", {len(failed)} failed: {failed[0].get('note', 'balances')}"
+                                                      if failed else "")}
+
+
+def camt_report(report, q, account: str, source: str):
     balances = {}
     for b in report.findall("d:Bal", q):
         amount = Decimal(b.find("d:Amt", q).text)
@@ -162,6 +181,6 @@ def parse_camt(xml: Path, account: str, source: str):
     total = sum((r["amount"] for r in rows), Decimal(0))
     start = balances.get("OPBD", balances.get("PRCD", Decimal(0)))
     end = balances.get("CLBD")
-    return rows, {"file": xml.name, "n": len(rows), "opening": start, "closing": end, "sum": total,
+    return rows, {"file": "", "n": len(rows), "opening": start, "closing": end, "sum": total,
                   "difference": end - (start + total) if end is not None else None,
                   "ok": end is not None and start + total == end}

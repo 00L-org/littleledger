@@ -62,6 +62,14 @@ def camt_xml(iban, entries, opening, closing, frm="2025-01-02", to="2025-01-31")
             f"</Rpt></BkToCstmrAcctRpt></Document>")
 
 
+def two_reports(iban_a, iban_b):
+    """camt.052 with two balanced reports: +10 on iban_a, +20 on iban_b."""
+    one = camt_xml(iban_a, [(10, "CRDT", "2025-01-03", "A1", "X", "a")], 0, 10)
+    two = camt_xml(iban_b, [(20, "CRDT", "2025-01-03", "B1", "Y", "b")], 0, 20)
+    rpt = lambda doc: doc[doc.index("<Rpt>"):doc.index("</Rpt>") + 6]
+    return one.replace(rpt(one), rpt(one) + rpt(two))
+
+
 def quiet(fn, *args, **kwargs):
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
@@ -213,8 +221,121 @@ class TestDedupe(unittest.TestCase):
                 self.tx("NONREF", "f1", "rent"), self.tx("NONREF", "f1", "fee"),   # distinct, no reference
                 self.tx("", "f1", "coffee"), self.tx("", "f1", "coffee"),    # identical real twins
                 self.tx("", "f2", "coffee"), self.tx("", "f2", "coffee")]    # the same twins again
-        kept, removed = transactions.dedupe(rows)
-        self.assertEqual((len(kept), removed), (5, 3))
+        kept, removed, conflicts = transactions.dedupe(rows)
+        self.assertEqual((len(kept), removed, conflicts), (5, 3, []))
+
+    def test_counterparty_and_conflicts(self):
+        bakery, bookshop = self.tx("", "f1", ""), self.tx("", "f2", "")
+        bakery["counterparty"], bookshop["counterparty"] = "BAKERY", "BOOKSHOP"
+        kept, removed, _ = transactions.dedupe([bakery, bookshop])          # same day and amount, other shops
+        self.assertEqual((len(kept), removed), (2, 0))
+        kept, removed, conflicts = transactions.dedupe([self.tx("R9", "f1"), self.tx("R9", "f2", amount="11")])
+        self.assertEqual((len(kept), len(conflicts)), (2, 1))              # same reference, other amount
+
+
+class TestReviewFindings(Archive):
+    """Counter-cases from the external review of 0.1.0 (F01–F09)."""
+
+    def file(self):
+        return quiet(filing.run, self.root, apply=True)
+
+    def test_baseline_survives_imports(self):                                   # F01
+        self.put("inbox/Konto_1234567890-Auszug_2024_3.pdf", "statement")
+        self.file()
+        doc = self.root / "raw/bank/haspa-giro-7890/kontoauszug/2024/2024-03_haspa-giro-7890_kontoauszug.pdf"
+        doc.write_text("tampered")
+        self.put("inbox/Konto_1234567890-Auszug_2024_4.pdf", "next statement")
+        code, out = self.file()
+        self.assertEqual(code, 1, out)
+        self.assertIn("STOP", out)
+        self.assertTrue((self.root / "inbox/Konto_1234567890-Auszug_2024_4.pdf").exists())
+        self.assertIn("CHANGED", quiet(filing.verify, self.root)[1])
+        doc.write_text("statement")
+        self.put("raw/bank/haspa-giro-7890/kontoauszug/2024/stray.pdf", "x")      # foreign file
+        self.assertEqual(self.file()[0], 1)
+
+    def test_documents_without_manifest_fail(self):                             # F01, F09
+        self.put("raw/belege/vertrag/2024/a.pdf", "x")
+        code, out = quiet(filing.verify, self.root)
+        self.assertEqual(code, 1, out)
+        self.assertIn("NO MANIFEST", out)
+
+    def test_failed_file_excluded(self):                                        # F02
+        self.put("raw/bank/test-giro-3000/camt052/2025/x.xml", camt_xml(
+            "DE89370400440532013000", [(10, "CRDT", "2025-01-03", "R1", "X", "t")], 100, 150))
+        code, out = quiet(transactions.run, self.root)
+        self.assertEqual(code, 1, out)
+        rows = (self.root / "build/transactions.csv").read_text().splitlines()
+        self.assertEqual(len(rows), 1, rows)                                    # header only
+
+    def test_all_reports_and_their_accounts(self):                              # F04, F05
+        same = self.put("raw/same.xml", two_reports("DE89370400440532013000", "DE89370400440532013000"))
+        rows, check = parse_camt(same, "test-giro-3000", "raw/same.xml", ["89370400440532013000"])
+        self.assertEqual((len(rows), check["ok"]), (2, True))
+        mixed = self.put("raw/mixed.xml", two_reports("DE89370400440532013000", "DE12672300004000000001"))
+        rows, check = parse_camt(mixed, "test-giro-3000", "raw/mixed.xml", ["89370400440532013000"])
+        self.assertFalse(check["ok"], check)
+
+    def test_content_iban_beats_file_name(self):                                # F05
+        name = "01_01_2025-01_01_2026_C52_DE12672300004000000001_EUR.xml"
+        self.put(f"inbox/{name}", camt_xml("DE89370400440532013000", [], 0, 0))
+        plan = filing.plan_bank(self.root / "inbox" / name, Accounts(load(self.root)))
+        self.assertEqual(plan[0], "test-giro-3000")
+
+    def test_zip_members_with_same_name(self):                                  # F06
+        import zipfile
+        with zipfile.ZipFile(self.root / "inbox/post.zip", "w") as z:
+            z.writestr("one/invoice.pdf", "first")
+            z.writestr("two/invoice.pdf", "second")
+        self.file()
+        files = sorted(p.read_text() for p in (self.root / "inbox/unzipped_post").iterdir())
+        self.assertEqual(files, ["first", "second"])
+
+    def test_index_keeps_categories_apart(self):                                # F07
+        self.put("inbox/a.pdf", "invoice")
+        self.put("inbox/b.pdf", "contract")
+        self.put("raw/CATALOG.csv", "original;date;category;source;description;doc_no;year\n"
+                                    "a.pdf;2025-02-01;rechnung;acme;service;;\n"
+                                    "b.pdf;2025-02-01;vertrag;acme;service;;\n")
+        self.file()
+        index = {r.split(";")[0]: r for r in (self.root / "raw/INDEX.csv").read_text().splitlines()[1:]}
+        self.assertIn(";a.pdf;rechnung;", index["belege/rechnung/2025/2025-02-01_acme_service.pdf"])
+        self.assertIn(";b.pdf;vertrag;", index["belege/vertrag/2025/2025-02-01_acme_service.pdf"])
+
+    def test_catalog_cannot_leave_raw(self):                                    # F08
+        self.put("inbox/x.pdf", "x")
+        self.put("raw/CATALOG.csv", "original;date;category;source;description;doc_no;year\n"
+                                    "x.pdf;2025-02-01;../../tax;a;b;;\n")
+        code, out = self.file()
+        self.assertIn("INVALID CATALOG ROW (1)", out)
+        self.assertTrue((self.root / "inbox/x.pdf").exists())
+        self.assertFalse((self.root / "tax").exists())
+
+    def test_interrupted_import_stays_consistent(self):                         # F09
+        self.put("inbox/Konto_1234567890-Auszug_2024_3.pdf", "march")
+        self.put("inbox/Konto_1234567890-Auszug_2024_4.pdf", "april")
+        real, calls = filing.shutil.move, []
+
+        def failing_move(src, dst):
+            calls.append(src)
+            if len(calls) == 2:
+                raise OSError("disk unplugged")
+            return real(src, dst)
+        filing.shutil.move = failing_move
+        try:
+            with self.assertRaises(OSError):
+                self.file()
+        finally:
+            filing.shutil.move = real
+        self.assertEqual(quiet(filing.verify, self.root)[0], 0)                 # filed part is recorded
+        self.assertEqual(self.file()[0], 0)                                     # rerun completes
+        self.assertEqual(len((self.root / "raw/MANIFEST.sha256").read_text().splitlines()), 2)
+
+    def test_unsafe_account_slug(self):
+        (self.root / "PROFILE.md").write_text(PROFILE.replace("| mlp-postbox |", "| ../postbox |"))
+        code, out = self.file()
+        self.assertEqual(code, 1, out)
+        self.assertIn("must be lowercase", out)
 
 
 class TestSession(Archive):

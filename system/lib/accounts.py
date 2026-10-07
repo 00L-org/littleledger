@@ -28,6 +28,15 @@ def load(root: Path) -> list[dict]:
     return rows
 
 
+def problems(rows: list[dict]) -> list[str]:
+    """Account slugs become folder names: they must be safe and unique."""
+    slugs = [r["account"] for r in rows]
+    bad = [s for s in slugs if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", s)]
+    twice = sorted({s for s in slugs if slugs.count(s) > 1})
+    return ([f"PROFILE.md: account slug '{s}' must be lowercase ASCII, digits and hyphens" for s in bad]
+            + [f"PROFILE.md: account slug '{s}' appears twice" for s in twice])
+
+
 def digits(s: str) -> str:
     return re.sub(r"\D", "", s or "")
 

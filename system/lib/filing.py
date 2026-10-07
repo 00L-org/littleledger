@@ -1,11 +1,13 @@
-"""Filing: move documents from inbox/ into raw/ with canonical names, deduplicated and indexed.
+"""Filing: move documents from inbox/ into raw/ with canonical names, deduplicated and recorded.
 
 Layout
-  raw/bank/<account>/<kind>/<year>/<date>_<account>_<kind>.<ext>      bank files, recognised by name
+  raw/bank/<account>/<kind>/<year>/<date>_<account>_<kind>.<ext>      bank files, recognised by name or content
   raw/belege/<category>/<year>/<date>_<source>_<description>[_<no>].<ext>   other files, via raw/CATALOG.csv
   raw/<file>                                                          metadata kept by this tool
-Documents live only in subfolders of raw/. Nothing is deleted: duplicates and unpacked
-archives go to build/discarded/ and are logged in raw/DISCARDED.csv.
+Documents live only in subfolders of raw/. raw/MANIFEST.sha256 is the baseline: every filed document
+gets its line right after it is moved, and existing lines are never rewritten. Filing refuses to run
+while raw/ differs from the baseline. Nothing is deleted: duplicates and unpacked archives go to
+build/discarded/ and are logged in raw/DISCARDED.csv.
 """
 from __future__ import annotations
 
@@ -16,10 +18,10 @@ import shutil
 import unicodedata
 import zipfile
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
-from lib.accounts import Accounts, load
+from lib.accounts import Accounts, load, problems
 
 UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss", "Ä": "Ae", "Ö": "Oe", "Ü": "Ue"})
 CATALOG_FIELDS = ["original", "date", "category", "source", "description", "doc_no", "year"]
@@ -56,7 +58,7 @@ def documents(raw: Path):
 
 # ------------------------------------------------------------------ bank files
 def camt_info(path: Path):
-    """(kind, IBAN, first date, last date) of a camt.052/053 file, or None."""
+    """(kind, [IBANs of its reports], first date, last date) of a camt.052/053 file, or None."""
     try:
         root = ET.parse(path).getroot()
     except (ET.ParseError, OSError):
@@ -66,33 +68,42 @@ def camt_info(path: Path):
     if not m:
         return None
     q = {"d": ns}
-    iban = root.find(".//d:Acct/d:Id/d:IBAN", q)
+    ibans = sorted({e.text.strip() for e in root.findall(".//d:Rpt/d:Acct/d:Id/d:IBAN", q)
+                    + root.findall(".//d:Stmt/d:Acct/d:Id/d:IBAN", q) if e.text})
     days = sorted(e.text[:10] for e in root.findall(".//d:Ntry/d:BookgDt/d:Dt", q) if e.text)
     frm = root.find(".//d:FrToDt/d:FrDtTm", q)
     to = root.find(".//d:FrToDt/d:ToDtTm", q)
     first = frm.text[:10] if frm is not None else (days[0] if days else None)
     last = to.text[:10] if to is not None else (days[-1] if days else None)
-    if iban is None or not first:
+    if not ibans or not first:
         return None
-    return f"camt05{m.group(1)}", iban.text, first, last
+    return f"camt05{m.group(1)}", ibans, first, last
 
 
 def plan_bank(path: Path, acc: Accounts):
-    """(account, kind, year, base name) for a bank file, or None. Rules are tried in order."""
+    """(account, kind, year, base name) for a bank file, or None. Rules are tried in order.
+    For camt XML the IBANs inside decide: a name rule applies only if they name the same account."""
     name, folder = path.name, path.parent.name
+    info = camt_info(path) if path.suffix.lower() == ".xml" else None
+    owners = {acc.find(i) for i in info[1]} if info else set()
+
+    def fits(a):
+        return info is None or owners == {a}
 
     # Haspa camt.052 "booked" download: folder <from>-<to>-<number>-camt52Booked, one XML per day
     o = re.match(r"(?:unzipped_|entpackt_)?\d{8}-\d{8}-(\d+)-camt5([23])Booked$", folder)
     t = re.match(r"(\d{4})\.(\d{2})\.(\d{2})\.xml$", name)
-    if o and t and acc.find(o.group(1)):
-        a, kind, day = acc.find(o.group(1)), f"camt05{o.group(2)}", f"{t.group(1)}-{t.group(2)}-{t.group(3)}"
+    a = o and t and acc.find(o.group(1))
+    if a and fits(a):
+        kind, day = f"camt05{o.group(2)}", f"{t.group(1)}-{t.group(2)}-{t.group(3)}"
         return a, kind, t.group(1), f"{day}_{a}_{kind}-tag"
 
     # camt export named <dd_mm_yyyy>-<dd_mm_yyyy>_C52_<IBAN>_EUR[_<part>].xml (Sparkassen, MLP)
     m = re.search(r"_C5([23])_(DE\d{20})_", name)
     z = re.match(r"(\d{2})_(\d{2})_(\d{4})-(\d{2})_(\d{2})_(\d{4})", name)
-    if m and z and acc.find(m.group(2)):
-        a, kind = acc.find(m.group(2)), f"camt05{m.group(1)}"
+    a = m and z and acc.find(m.group(2))
+    if a and fits(a):
+        kind = f"camt05{m.group(1)}"
         frm, to = f"{z.group(3)}-{z.group(2)}-{z.group(1)}", f"{z.group(6)}-{z.group(5)}-{z.group(4)}"
         base = f"{frm}_bis_{to}_{a}_{kind}"
         part = re.search(r"_(\d{6})\.xml$", name)
@@ -132,9 +143,8 @@ def plan_bank(path: Path, acc: Accounts):
 
     # OLB camt export without account in the name: Umsaetze_XML-Export_<yyyy-mm-dd>.xml
     m = re.match(r"Ums.{1,3}tze_XML-Export_(\d{4})-(\d{2})-(\d{2})\.xml$", name, re.I)
-    info = camt_info(path) if m else None
-    if m and info and acc.find(info[1]):
-        a, day = acc.find(info[1]), f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    if m and len(owners) == 1 and None not in owners:
+        a, day = owners.pop(), f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
         return a, "camt-export", m.group(1), f"{day}_{a}_umsatzexport-camt052"
 
     # MLP statement PDF: <number>_<year>_Nr.<no>_Kontoauszug_vom_<yyyy.mm.dd>_<x>.pdf
@@ -172,11 +182,10 @@ def plan_bank(path: Path, acc: Accounts):
         a, day = acc.find(m.group(1)), f"{m.group(2)}-{m.group(3)}-{m.group(4)}"
         return a, "umsatzexport", m.group(2), f"{day}_{a}_umsatzexport-csv"
 
-    # Any other camt file: account from the IBAN inside, dates from its content
-    info = camt_info(path) if path.suffix.lower() == ".xml" else None
-    if info and acc.find(info[1]):
-        kind, iban, first, last = info
-        a = acc.find(iban)
+    # Any other camt file of exactly one registered account: name from its content
+    if info and len(owners) == 1 and None not in owners:
+        kind, _, first, last = info
+        a = owners.pop()
         return a, kind, first[:4], f"{first}_bis_{last}_{a}_{kind}"
     return None
 
@@ -189,6 +198,24 @@ def load_catalog(raw: Path) -> dict:
     with path.open(encoding="utf-8") as fh:  # macOS stores names in NFD, the CSV holds NFC
         return {unicodedata.normalize("NFC", r["original"]): r
                 for r in csv.DictReader(fh, delimiter=";") if r.get("original")}
+
+
+def catalog_problem(e: dict, acc: Accounts) -> str | None:
+    """Why a catalog row cannot be used, or None. Rows only ever name folders inside raw/."""
+    category = e.get("category", "")
+    if not (category == "discard" or re.fullmatch(r"[a-z0-9-]+", category)
+            or re.fullmatch(r"bank/[a-z0-9-]+/[a-z0-9-]+", category)):
+        return f"category '{category}' is not a folder name (lowercase, digits, hyphens)"
+    if category.startswith("bank/") and category.split("/")[1] not in {r["account"] for r in acc.rows}:
+        return f"account '{category.split('/')[1]}' is not in PROFILE.md"
+    if e.get("year") and not re.fullmatch(r"\d{4}", e["year"]):
+        return f"year '{e['year']}' is not YYYY"
+    if e.get("date"):
+        try:
+            date.fromisoformat(e["date"])
+        except ValueError:
+            return f"date '{e['date']}' is not YYYY-MM-DD"
+    return None
 
 
 def plan_catalog(name: str, catalog: dict):
@@ -205,9 +232,31 @@ def plan_catalog(name: str, catalog: dict):
     return e["category"], year, "_".join(p for p in parts if p)
 
 
+# -------------------------------------------------------------------- baseline
+def load_manifest(raw: Path) -> dict:
+    path = raw / "MANIFEST.sha256"
+    if not path.exists():
+        return {}
+    return {line.split("  ", 1)[1]: line.split("  ", 1)[0]
+            for line in path.read_text(encoding="utf-8").splitlines() if "  " in line}
+
+
+def deviations(raw: Path, hashes: dict | None = None) -> list[str]:
+    """Every difference between raw/ and raw/MANIFEST.sha256; empty when raw/ is intact."""
+    hashes = hashes if hashes is not None else {p: sha256(p) for p in documents(raw)}
+    expected = load_manifest(raw)
+    present = {p.relative_to(raw).as_posix(): p for p in hashes}
+    if not (raw / "MANIFEST.sha256").exists():
+        return [f"NO MANIFEST: raw/{k}" for k in sorted(present)]
+    return ([f"MISSING: raw/{k}" for k in sorted(set(expected) - set(present))]
+            + [f"CHANGED: raw/{k}" for k in sorted(set(expected) & set(present)) if hashes[present[k]] != expected[k]]
+            + [f"NOT IN MANIFEST: raw/{k}" for k in sorted(set(present) - set(expected))])
+
+
 # --------------------------------------------------------------------- running
 def unzip(inbox: Path, discarded: Path, apply: bool) -> int:
-    """Unpack ZIP archives in inbox/ into inbox/unzipped_<name>/; the archive goes to build/discarded/."""
+    """Unpack ZIP archives in inbox/ into inbox/unzipped_<name>/; the archive goes to build/discarded/.
+    Members with the same name but other content get a checksum suffix instead of overwriting."""
     archives = sorted(p for p in inbox.glob("*") if p.suffix.lower() == ".zip")
     for z in archives:
         target = inbox / f"unzipped_{z.stem}"
@@ -216,8 +265,16 @@ def unzip(inbox: Path, discarded: Path, apply: bool) -> int:
             target.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(z) as zf:
                 for info in zf.infolist():
-                    if not info.is_dir():
-                        (target / Path(unmangle(info.filename)).name).write_bytes(zf.read(info))
+                    name = Path(unmangle(info.filename)).name
+                    if info.is_dir() or not name:
+                        continue
+                    data = zf.read(info)
+                    dest = target / name
+                    if dest.exists():
+                        if hashlib.sha256(data).hexdigest() == sha256(dest):
+                            continue
+                        dest = dest.with_name(f"{dest.stem}_{hashlib.sha256(data).hexdigest()[:6]}{dest.suffix}")
+                    dest.write_bytes(data)
             (discarded / "archives").mkdir(parents=True, exist_ok=True)
             shutil.move(str(z), str(discarded / "archives" / z.name))
     return len(archives)
@@ -225,14 +282,24 @@ def unzip(inbox: Path, discarded: Path, apply: bool) -> int:
 
 def run(root: Path, apply: bool = False) -> int:
     inbox, raw, discarded = root / "inbox", root / "raw", root / "build" / "discarded"
-    acc, catalog = Accounts(load(root)), load_catalog(raw)
+    rows = load(root)
+    for p in problems(rows):
+        print(p)
+    if problems(rows):
+        return 1
+    acc, catalog = Accounts(rows), load_catalog(raw)
     if not inbox.exists():
         print("inbox/ does not exist: nothing to file.")
         return 0
+    hashes = {p: sha256(p) for p in documents(raw)}
+    if apply and hashes and deviations(raw, hashes):
+        print("STOP: raw/ differs from raw/MANIFEST.sha256. Run `verify`, resolve it "
+              "(system/REFERENCE.md › Troubleshooting), then file again.")
+        return 1
     if unzip(inbox, discarded, apply) and not apply:
         print("  (archives are unpacked with --apply; run again afterwards)\n")
-    known = {sha256(p): p.relative_to(root) for p in documents(raw)}
-    moves, duplicates, unknown = [], [], []
+    known = {h: p.relative_to(root) for p, h in hashes.items()}
+    moves, duplicates, unknown, invalid = [], [], [], []
 
     for src in sorted(inbox.rglob("*")):
         if not src.is_file() or src.name.startswith("."):
@@ -248,11 +315,15 @@ def run(root: Path, apply: bool = False) -> int:
             if not plan:
                 unknown.append(src.relative_to(root))
                 continue
-            category, year, base = plan
             e = catalog[unicodedata.normalize("NFC", src.name)]
+            problem = catalog_problem(e, acc)
+            if problem:
+                invalid.append((src.relative_to(root), problem))
+                continue
+            category, year, base = plan
             if category == "discard":
                 target = discarded / f"{base}.{ext}"
-            elif category.startswith("bank/"):          # bank letter without a name rule
+            elif category.startswith("bank/"):          # other bank documents of a known account
                 target = raw / category / year / f"{base}.{ext}"
             else:
                 target = raw / "belege" / category / year / f"{base}.{ext}"
@@ -265,7 +336,7 @@ def run(root: Path, apply: bool = False) -> int:
         if target.exists() or any(m["to"] == target for m in moves):   # same name, other content
             target = target.with_name(f"{target.stem}_{h[:6]}{target.suffix}")
         known[h] = target.relative_to(root)
-        moves.append({"from": src, "to": target, **meta})
+        moves.append({"from": src, "to": target, "sha256": h, **meta})
 
     if apply:
         for m in moves:
@@ -273,6 +344,9 @@ def run(root: Path, apply: bool = False) -> int:
                 raise SystemExit(f"STOP: {m['to']} already exists")
             m["to"].parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(m["from"]), str(m["to"]))
+            if m["category"] != "discard":            # record the document right after moving it
+                with (raw / "MANIFEST.sha256").open("a", encoding="utf-8") as fh:
+                    fh.write(f"{m['sha256']}  {m['to'].relative_to(raw).as_posix()}\n")
         if duplicates:
             (discarded / "duplicates").mkdir(parents=True, exist_ok=True)
             log = raw / "DISCARDED.csv"
@@ -288,7 +362,7 @@ def run(root: Path, apply: bool = False) -> int:
                         d = d.with_name(f"{d.stem}_{h[:6]}{d.suffix}")
                     shutil.move(str(src), str(d))
                     w.writerow([now, src.name, "identical to a file in raw/", same, h])
-        if moves or duplicates:
+        if moves:
             write_index(root, catalog)
 
     print(f"{'MOVED' if apply else 'WOULD MOVE'}: {len(moves)}")
@@ -298,6 +372,10 @@ def run(root: Path, apply: bool = False) -> int:
         print(f"\nDUPLICATES ({len(duplicates)}) -> build/discarded/duplicates/:")
         for src, same, _ in duplicates:
             print(f"  {src.name}  (same as {same})")
+    if invalid:
+        print(f"\nINVALID CATALOG ROW ({len(invalid)}): fix the row in raw/CATALOG.csv")
+        for src, problem in invalid:
+            print(f"  {src}: {problem}")
     if unknown:
         print(f"\nNO RULE ({len(unknown)}): add a row to raw/CATALOG.csv or the account to PROFILE.md")
         for u in unknown:
@@ -306,49 +384,36 @@ def run(root: Path, apply: bool = False) -> int:
 
 
 def write_index(root: Path, catalog: dict) -> None:
-    """Rebuild raw/INDEX.csv and raw/MANIFEST.sha256 from what is actually in raw/."""
+    """Rebuild raw/INDEX.csv, a readable view of raw/: checksums from the baseline, origin from the catalog."""
     raw = root / "raw"
-    by_base = {}
+    origin = {}
     for original, e in catalog.items():
         plan = plan_catalog(original, catalog)
         if plan and plan[0] != "discard":
-            by_base[plan[2]] = (original, e)
+            category, year, base = plan
+            folder = category if category.startswith("bank/") else f"belege/{category}"
+            origin[f"{folder}/{year}/{base}"] = (original, e)
+    baseline = load_manifest(raw)
     rows = []
     for p in documents(raw):
         rel = p.relative_to(raw)
-        original, e = by_base.get(p.stem, ("", None))
-        rows.append([rel.as_posix(), sha256(p), p.stat().st_size, original,
+        original, e = origin.get(rel.with_suffix("").as_posix(), ("", None))
+        rows.append([rel.as_posix(), baseline.get(rel.as_posix()) or sha256(p), p.stat().st_size, original,
                      e["category"] if e else rel.parts[0], e["source"] if e else "",
                      e["description"] if e else "", e["date"] if e else ""])
     with (raw / "INDEX.csv").open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh, delimiter=";")
         w.writerow(INDEX_FIELDS)
         w.writerows(rows)
-    with (raw / "MANIFEST.sha256").open("w", encoding="utf-8") as fh:
-        fh.writelines(f"{r[1]}  {r[0]}\n" for r in rows)
-    print(f"\nraw/INDEX.csv and raw/MANIFEST.sha256 rewritten: {len(rows)} documents")
+    print(f"\nraw/INDEX.csv rewritten: {len(rows)} documents")
 
 
 def verify(root: Path) -> int:
-    """Compare every document in raw/ with raw/MANIFEST.sha256."""
+    """Compare every document in raw/ with the baseline raw/MANIFEST.sha256."""
     raw = root / "raw"
-    manifest = raw / "MANIFEST.sha256"
-    if not manifest.exists():
-        print("raw/MANIFEST.sha256 missing: nothing to verify yet.")
-        return 0
-    expected = {}
-    for line in manifest.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            h, path = line.split("  ", 1)
-            expected[path] = h
-    present = {p.relative_to(raw).as_posix(): p for p in documents(raw)}
-    missing = sorted(set(expected) - set(present))
-    unlisted = sorted(set(present) - set(expected))
-    changed = sorted(k for k in set(expected) & set(present) if sha256(present[k]) != expected[k])
-    for label, items in (("MISSING", missing), ("CHANGED", changed), ("NOT IN MANIFEST", unlisted)):
-        for i in items:
-            print(f"{label}: raw/{i}")
-    ok = not (missing or changed or unlisted)
-    print(f"{len(expected)} documents in manifest, {len(present)} in raw/: "
-          + ("all intact." if ok else f"{len(missing)} missing, {len(changed)} changed, {len(unlisted)} not listed."))
-    return 0 if ok else 1
+    found = deviations(raw)
+    for line in found:
+        print(line)
+    print(f"{len(load_manifest(raw))} documents in the baseline, {len(documents(raw))} in raw/: "
+          + ("all intact." if not found else f"{len(found)} deviation(s)."))
+    return 0 if not found else 1

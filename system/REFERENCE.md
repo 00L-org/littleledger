@@ -45,15 +45,15 @@ A bank file belongs to the account whose id ends with the number in the file nam
    - date: document date, YYYY-MM-DD; for an undated document the date of receipt, noted in the description. year: only if the document belongs to another year than its date.
    - category: folder under raw/belege/, e.g. eingangsrechnung, ausgangsrechnung, finanzamt, steuererklaerung, versicherung, vertrag, vorsorge. `bank/<account>/<kind>` files a bank document to its account, e.g. `bank/dkb-visa-8899/abrechnung` for a card statement PDF. `discard` moves the file to build/discarded/.
    - source: the other party, i.e. the sender of a received and the recipient of a sent document. description: a few words. doc_no: invoice or reference number, if any.
-   - Correct a row only while its file is still in inbox/; once filed, the name is final.
+   - Correct a row only while its file is still in inbox/; once filed, the name is final. Rows with unusable fields are refused as INVALID CATALOG ROW.
 4. Classify official letters by document type, not by sender and date: a Grundbuch Vormerkung is not the Umschreibung.
-5. `python3 system/archive.py file --apply` unpacks ZIP archives (run it again afterwards), moves the files, moves duplicates to build/discarded/duplicates/ with a line in raw/DISCARDED.csv, and rewrites raw/INDEX.csv and raw/MANIFEST.sha256.
+5. `python3 system/archive.py file --apply` refuses to run while raw/ differs from raw/MANIFEST.sha256. It unpacks ZIP archives (run it again afterwards), moves each file and records it in raw/MANIFEST.sha256 at once, moves duplicates to build/discarded/duplicates/ with a line in raw/DISCARDED.csv, and rewrites raw/INDEX.csv. Manifest lines are never rewritten.
 6. Checkpoint. Later, `verify` proves that nothing in raw/ has changed.
 
 ## Transactions
 - `python3 system/archive.py transactions` reads every account that has a parser and writes build/transactions.csv: account, booking_date, value_date, amount (sign from the holder's view), currency, counterparty, text, type, ref, source_type, source_file.
-- build/check-report.txt marks each file OK (its balances add up), FAIL (keep it out of every analysis; fix the parser or get a better file) or SKIP (layout not supported).
-- Overlapping exports are deduplicated by the bank reference, or, where none exists (empty, NONREF, NOTPROVIDED), by account, day, amount and text counted per file, so identical real payments survive.
+- build/check-report.txt marks each file OK (its balances add up), FAIL (left out of transactions.csv; fix the parser or get a better file) or SKIP (layout not supported). Every report in a camt file must carry the IBAN of its account.
+- Overlapping exports are deduplicated by the bank reference, or, where none exists (empty, NONREF, NOTPROVIDED), by account, day, amount, counterparty and text counted per file, so identical real payments survive. The same reference with another day or amount is kept and reported as CONFLICT.
 - A credit card settlement on the current account is an internal transfer; the card statement holds the single purchases. Count only one side: the single purchases where the card statement is read, otherwise the settlement.
 - Haspa statements come in three layouts; only the one used from 2022 on is parsed, older ones show as SKIP.
 
@@ -67,6 +67,6 @@ A bank file belongs to the account whose id ends with the number in the file nam
 ## Troubleshooting
 - git cannot remove .git/index.lock (Claude Desktop): request delete permission for this folder; it lapses when the app restarts.
 - Commits should name the owner as author; if they do not, set `git config user.name` and `git config user.email` in this folder.
-- verify reports NOT IN MANIFEST: a file reached raw/ without `file` and is no document yet; move it to inbox/ and file it.
+- verify reports NOT IN MANIFEST or NO MANIFEST: those files reached raw/ without `file` and are no documents yet; move them to inbox/ and file them. MISSING or CHANGED: restore the file from git (`git checkout -- raw/<path>`).
 - pdftotext missing: PDF statements are skipped until poppler is installed (macOS: `brew install poppler`).
 - Self-test: `python3 -m unittest discover -s system/tests`.

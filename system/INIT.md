@@ -8,7 +8,7 @@ Run `python3 --version` (3.9 or newer), `git --version` and `pdftotext -v` witho
 ## 2. Welcome
 Use the language the owner wrote in. In at most eight lines, say:
 - what the archive does: keeps statements and documents in this folder, names and checks them, builds one table of all transactions, tracks deadlines and open matters, answers questions about all of it, and remembers between sessions in any AI tool that can open the folder;
-- what it does not do: no bank logins, no cloud, no tax or legal advice;
+- what it does not do: no bank logins, no uploads by the archive itself (the AI tool reads the files it works on), no tax or legal advice;
 - how it works: put files into inbox/ and say "start"; the assistant does the rest; git records every change, on this computer only.
 Then ask whether to set it up now.
 
@@ -23,7 +23,7 @@ Record ideas beyond the first goal as Open items as well; do not build them now.
 ## 4. Create
 1. Write PROFILE.md from system/templates/PROFILE.md (fields: system/REFERENCE.md › Profile and › Accounts). Name each account `<bank>-<kind>-<last4>` in lowercase ASCII with a short bank name, e.g. `sparkasse-giro-1234`; set its parser from the exports it offers; put private, business or mixed into the note.
 2. Run `python3 system/archive.py init`.
-3. Fill STATE.md: Situation from the answers; Open with the owner's deadlines, one "export statements" item per account dated today, and every "later"; Now with the next step.
+3. Fill STATE.md: Situation from the answers; Open with the owner's deadlines, one "export statements" item per account dated today, one item to make sure this folder is backed up, and every "later"; Now with the next step.
 4. Checkpoint.
 
 ## 5. First filing
