@@ -1,4 +1,4 @@
-# finance-archive
+# littleledger
 
 A personal finance archive that an AI assistant keeps in order with you: statements and documents in one local folder, named, checked and versioned; one table of all transactions; deadlines and open matters that come back on time; and a memory that lasts between sessions and across AI tools.
 
@@ -23,5 +23,16 @@ camt.052/053 XML, the standard export of German banks, is read report by report 
 
 No tax or legal advice.
 
+## Contributing
+Issues and pull requests are welcome; Wolfgang decides what goes in. Develop in a clone of this repository and keep your own archive in a separate folder: `init` removes git remotes and commits everything in its folder. Do not run `init` in the development checkout.
+
+Use synthetic examples only in issues, pull requests and tests; never include personal statements, account details or credentials.
+
+Run the tests from the repository root:
+```sh
+python3 -m unittest discover -s system/tests
+```
+Tests need Python 3.9+ and git, but not `pdftotext`. CI runs them on Ubuntu and macOS using each runner's system Python; this is not a test of every supported Python version.
+
 ## License
-Code: MIT (`LICENSE`). Documentation: CC BY 4.0.
+MIT (`LICENSE`), code and documentation.

@@ -2,6 +2,9 @@
 
 Each version lists what changed and what an existing archive must do (system/UPDATE.md, step 6).
 
+## 0.2.1 · 2026-10-07
+Renamed to littleledger; code and documentation under MIT. Added contribution guidance and tests on Ubuntu and macOS. Instance changes: none.
+
 ## 0.2.0 · 2026-10-07
 Every booking keeps its sources, card payments are linked to their statements, and gaps in the statements show:
 - build/observations.csv lists every booking read with a stable id (file checksum and position); build/transactions.csv gains the columns id, merged, settles and open.

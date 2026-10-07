@@ -145,7 +145,7 @@ def run(root: Path) -> int:
                f"{len(passed) - len(rows)} seen twice and merged; "
                f"{len(paid & set(statements))} of {len(statements)} card statements settled; "
                f"{len(questions)} open question(s), {affected} provisional; {len(invalid)} invalid link(s); "
-               f"{sum(len(h) for _, h in cover.values())} coverage gap(s). finance-archive {version}")
+               f"{sum(len(h) for _, h in cover.values())} coverage gap(s). littleledger {version}")
     (build / "check-report.txt").write_text("\n".join(lines + ["", summary, ""]), encoding="utf-8")
     print("\n".join(line for line in lines if not line.startswith(("OK", "SKIP"))) + "\n" + summary
           + ("\nDecide open questions in LINKS.csv (system/REFERENCE.md › Transactions)." if questions else ""))

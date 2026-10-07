@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""finance-archive command line. Run from anywhere: python3 system/archive.py <command>."""
+"""littleledger command line. Run from anywhere: python3 system/archive.py <command>."""
 import sys
 from pathlib import Path
 

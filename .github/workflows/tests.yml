@@ -1,0 +1,23 @@
+name: tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: System Python
+        run: |
+          /usr/bin/python3 --version
+          /usr/bin/python3 -c "import sys; assert sys.version_info >= (3, 9), 'Python 3.9+ required'"
+      - name: Tests
+        run: /usr/bin/python3 -m unittest discover -s system/tests
