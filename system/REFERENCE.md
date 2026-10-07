@@ -84,6 +84,8 @@ A bank file belongs to the account whose id ends with the number in the file nam
 ### Formats
 - camt batch entries are split into their items only where each item states an amount and the amounts add up to the entry; otherwise the entry stays one booking, marked `batch of <n>, not itemized`.
 - Haspa statements come in three layouts; only the one used from 2022 on is parsed, older ones show as SKIP.
+- Formats without a parser are archived, not read; tell the owner. camt from other banks is tested only against the author's exports: pending entries or a missing closing balance make a file FAIL. A new parser follows system/lib/parsers.py (bookings, balance check, stated periods) and comes with a test on synthetic data. Offer it as a pull request to github.com/00L-org/littleledger: an update replaces system/ and every local change in it.
+- There is no evaluation layer: analyses of build/transactions.csv are made per request. Keep the ones worth repeating in scripts/; one that would help every archive is welcome in the template.
 
 ## Bank exports
 - Best: camt.052 or camt.053 XML for the longest period offered; it carries balances and references, so every file can be checked.

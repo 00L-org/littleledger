@@ -2,6 +2,9 @@
 
 Each version lists what changed and what an existing archive must do (system/UPDATE.md, step 6).
 
+## 0.2.2 · 2026-10-07
+Scope stated in README and REFERENCE. Instance changes: none.
+
 ## 0.2.1 · 2026-10-07
 Renamed to littleledger; code and documentation under MIT. Added contribution guidance and tests on Ubuntu and macOS. Instance changes: none.
 

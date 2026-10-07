@@ -23,6 +23,9 @@ camt.052/053 XML, the standard export of German banks, is read report by report 
 
 No tax or legal advice.
 
+## Scope
+This is the archive I use myself, shared as it is: it reads camt and Hamburger Sparkasse statements because those are my banks, and it has no categories or reports. Adapters for other banks, an evaluation layer, or a bridge to tools like hledger or beancount are welcome as pull requests once they run well in your own archive. It does not try to be a complete product.
+
 ## Contributing
 Issues and pull requests are welcome; Wolfgang decides what goes in. Develop in a clone of this repository and keep your own archive in a separate folder: `init` removes git remotes and commits everything in its folder. Do not run `init` in the development checkout.
 
