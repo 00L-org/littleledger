@@ -28,7 +28,7 @@ This folder is a personal finance archive that you keep in order together with i
 - Put results, decisions and open questions into files before you report them as done.
 - When the owner corrects you, a step fails, or you take a detour, add one line under New in LEARNINGS.md at once.
 - Derive every status from the sources; never carry one forward unchecked.
-- Before calling anything missing, unpaid or wrong, read the source and confirm it covers the period.
+- Before calling anything missing, unpaid or wrong, read the source and confirm that the statements cover the period (`status` › Coverage).
 - Mark placeholder values with PLACEHOLDER and list them under Open; never file a document on a placeholder.
 - Version everything that leaves the archive (v1, v2) and record under In force who received which version.
 - Keep helper scripts in scripts/ or delete them deliberately; never leave them in temporary places.

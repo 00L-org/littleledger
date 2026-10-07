@@ -15,11 +15,11 @@ Needs Python 3.9 or newer and git; `pdftotext` (poppler) for PDF statements.
 - Your files stay in this folder: the archive logs into no bank, uploads nothing, and setup removes every git remote. The AI tool you use does read the files it works on and sends that content to its provider.
 - Git records every change but is no backup: back the folder up like any other.
 - `AGENTS.md` sends every assistant to `system/PROTOCOL.md`: how a session starts, keeps its state and closes.
-- Your files: `PROFILE.md` (you and your accounts), `STATE.md` (what is open, each item with a date), `LEARNINGS.md` (what the assistant has learned), `raw/` (originals, never changed), `tax/` (your work).
+- Your files: `PROFILE.md` (you and your accounts), `STATE.md` (what is open, each item with a date), `LEARNINGS.md` (what the assistant has learned), `LINKS.csv` (decisions on bookings), `raw/` (originals, never changed), `tax/` (your work).
 - `system/` belongs to the template; updating means replacing it (`system/UPDATE.md`).
 
 ## Formats
-camt.052/053 XML, the standard export of German banks, is read report by report and checked against its balances and the account's IBAN; files that fail stay out of the transaction table. Hamburger Sparkasse PDF statements (from 2022) and Mastercard statements are read too. All other files are archived with names, index and checksums.
+camt.052/053 XML, the standard export of German banks, is read report by report and checked against its balances and the account's IBAN; files that fail stay out of the transaction table. Hamburger Sparkasse PDF statements (from 2022) and Haspa Mastercard statements are read too. Every booking keeps its sources, card payments are linked to their statements, and gaps between statements show. All other files are archived with names, index and checksums.
 
 No tax or legal advice.
 

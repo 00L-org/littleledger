@@ -7,6 +7,8 @@ import subprocess
 from datetime import date, timedelta
 from pathlib import Path
 
+from lib import coverage
+
 DUE_DAYS = 7
 GAP_DAYS = 30
 DEFAULT_BUDGET = 5000
@@ -103,6 +105,7 @@ def status(root: Path) -> int:
     inbox = root / "inbox"
     files = [p for p in inbox.rglob("*") if p.is_file() and not p.name.startswith(".")] if inbox.exists() else []
     out.append(f"Inbox: {len(files) or 'empty'}" + (" file(s) -> file them" if files else ""))
+    out += coverage.status(root)
     used, limit = budget(root)
     out.append(f"LEARNINGS.md: {used} of {limit} characters" + (" -> OVER BUDGET: compact" if used > limit else ""))
     print("\n".join(out))
@@ -163,7 +166,7 @@ def init(root: Path) -> int:
     for d in ("inbox", "raw", "build"):
         (root / d).mkdir(exist_ok=True)
     for name, target in (("STATE.md", root / "STATE.md"), ("LEARNINGS.md", root / "LEARNINGS.md"),
-                         ("CATALOG.csv", root / "raw" / "CATALOG.csv")):
+                         ("LINKS.csv", root / "LINKS.csv"), ("CATALOG.csv", root / "raw" / "CATALOG.csv")):
         if not target.exists():
             shutil.copyfile(templates / name, target)
             created.append(target.relative_to(root).as_posix())

@@ -14,7 +14,7 @@
 - Tax advisor:
 
 ## Accounts
-| account | bank | kind | id | owner | parser | note |
-|---|---|---|---|---|---|---|
+| account | bank | kind | id | owner | parser | complete from | note |
+|---|---|---|---|---|---|---|---|
 
 ## Rules

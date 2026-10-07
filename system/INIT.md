@@ -16,12 +16,12 @@ Then ask whether to set it up now.
 Ask in three short rounds and offer a default wherever one makes sense. Accept "later" for everything except name and language, and turn each "later" into an Open item dated four weeks ahead, or a week before a related deadline if that comes first.
 1. Communication: name; language; style (short bullet points or explanations; how much detail).
 2. Purpose and situation: what the archive should do first (overview of money in and out, tax return, documents for a tax advisor, rental property, other) and what later; income types (employment, self-employment, rental, capital, abroad); tax advisor (none, or name and what they handle); years that matter.
-3. Accounts, one by one: bank; kind (current account, savings, credit card, depot); full IBAN, or the last four digits of a card; whose (own, joint, someone else's); private, business or mixed; which exports the bank offers (camt XML, PDF statements, CSV).
+3. Accounts, one by one: bank; kind (current account, savings, credit card, depot); full IBAN, or the last four digits of a card; whose (own, joint, someone else's); private, business or mixed; which exports the bank offers (camt XML, PDF statements, CSV); from which day its statements should be complete (default: the first day of the first year that matters).
 Finish with one question: what is pending right now (deadlines, letters, expected payments)?
 Record ideas beyond the first goal as Open items as well; do not build them now.
 
 ## 4. Create
-1. Write PROFILE.md from system/templates/PROFILE.md (fields: system/REFERENCE.md › Profile and › Accounts). Name each account `<bank>-<kind>-<last4>` in lowercase ASCII with a short bank name, e.g. `sparkasse-giro-1234`; set its parser from the exports it offers; put private, business or mixed into the note.
+1. Write PROFILE.md from system/templates/PROFILE.md (fields: system/REFERENCE.md › Profile and › Accounts). Name each account `<bank>-<kind>-<last4>` in lowercase ASCII with a short bank name, e.g. `sparkasse-giro-1234`; set its parser from the exports it offers and `complete from` from the answer; put private, business or mixed into the note.
 2. Run `python3 system/archive.py init`.
 3. Fill STATE.md: Situation from the answers; Open with the owner's deadlines, one "export statements" item per account dated today, one item to make sure this folder is backed up, and every "later"; Now with the next step.
 4. Checkpoint.

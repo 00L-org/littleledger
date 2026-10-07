@@ -292,7 +292,7 @@ def run(root: Path, apply: bool = False) -> int:
         print("inbox/ does not exist: nothing to file.")
         return 0
     hashes = {p: sha256(p) for p in documents(raw)}
-    if apply and hashes and deviations(raw, hashes):
+    if apply and deviations(raw, hashes):
         print("STOP: raw/ differs from raw/MANIFEST.sha256. Run `verify`, resolve it "
               "(system/REFERENCE.md › Troubleshooting), then file again.")
         return 1

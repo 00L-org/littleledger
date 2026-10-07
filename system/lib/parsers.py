@@ -1,9 +1,12 @@
-"""Parsers: raw bank files -> transactions plus a check of the file against its own balances.
+"""Parsers: raw bank files -> bookings plus a check of the file against its own balances.
 
-Each parser returns (transactions, check).
-  transaction: account, booking_date, value_date, amount (Decimal, sign from the holder's view),
-               currency, counterparty, text, type, ref, source_type, source_file
-  check:       file, n, ok (True passed, False failed, None layout not supported), plus balances
+Each parser returns (bookings, check).
+  booking: account, booking_date, value_date, amount (Decimal, sign from the holder's view),
+           currency, counterparty, text, type, ref, source_type, source_file
+  check:   file, n, ok (True passed, False failed, None layout not supported), balances, and
+           periods: (first day, last day) for each statement in the file, as the statement itself states
+                    it; never taken from its bookings; empty when the file states none
+           due:     card statements only: the amount charged to the account that pays the card
 A file whose check fails must not feed any analysis: either the parser or the file is wrong.
 """
 from __future__ import annotations
@@ -11,6 +14,7 @@ from __future__ import annotations
 import re
 import subprocess
 import xml.etree.ElementTree as ET
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -22,6 +26,11 @@ def dec(s: str) -> Decimal:
 def iso(d: str) -> str:
     day, month, year = d.split(".")
     return f"{'20' + year if len(year) == 2 else year}-{month}-{day}"
+
+
+def after(day: str) -> str:
+    """The day after an ISO date. A balance as of a day closes that day, so the next statement starts later."""
+    return (date.fromisoformat(day) + timedelta(days=1)).isoformat()
 
 
 def pdftext(pdf: Path) -> str:
@@ -47,9 +56,10 @@ def parse_haspa_text(txt: str, account: str, source: str):
     """Haspa layouts: 2018 'Buchungs- / Tag der', 2019-2021 'Datum Wert Erl.', from 2022 'Datum Erl. Betrag'.
     Only the layout from 2022 is parsed; older ones are reported as not supported."""
     name = Path(source).name
-    if re.search(r"Buchungs-\s+Tag der", txt) or re.search(r"Datum\s+Wert\s+Erl", txt):
-        return [], {"file": name, "n": 0, "ok": None, "note": "layout before 2022, no parser yet"}
     opening, closing = RE_OPEN.search(txt), RE_CLOSE.search(txt)
+    periods = [(after(iso(opening.group(1))), iso(closing.group(1)))] if opening and closing else []
+    if re.search(r"Buchungs-\s+Tag der", txt) or re.search(r"Datum\s+Wert\s+Erl", txt):
+        return [], {"file": name, "n": 0, "ok": None, "periods": periods, "note": "layout before 2022, no parser yet"}
     rows, current = [], None
     for line in (raw.rstrip() for raw in txt.splitlines()):
         if RE_CLOSE.search(line):
@@ -67,7 +77,7 @@ def parse_haspa_text(txt: str, account: str, source: str):
         else:
             current = None
     total = sum((r["amount"] for r in rows), Decimal(0))
-    check = {"file": name, "n": len(rows)}
+    check = {"file": name, "n": len(rows), "periods": periods}
     if opening and closing:
         start, end = dec(opening.group(2)), dec(closing.group(2))
         check.update(opening=start, closing=end, sum=total, difference=end - (start + total),
@@ -85,6 +95,7 @@ def parse_haspa_statement(pdf: Path, account: str, source: str, ids=()):
 RE_CARD = re.compile(r"^(\d{2}\.\d{2}\.\d{2})\s+(\d{2}\.\d{2}\.\d{2})\s+(\S.*?)\s{2,}([\d.]*\d,\d{2})\s*([+-])\s*$")
 RE_CARD_FEE = re.compile(r"^\s{6,}(\S.*?)\s{2,}([\d.]*\d,\d{2})\s*([+-])\s*$")
 RE_CARD_BALANCE = re.compile(r"Neuer Saldo\s+([\d.]*\d,\d{2})\s*([+-])")
+RE_CARD_PERIOD = re.compile(r"Ihre Abrechnung vom (\d{2}\.\d{2}\.\d{4}) bis (\d{2}\.\d{2}\.\d{4})")
 
 
 def parse_haspa_card_text(txt: str, account: str, source: str):
@@ -111,11 +122,12 @@ def parse_haspa_card_text(txt: str, account: str, source: str):
             if not re.search(r"Seite \d+ von|Hamburger Sparkasse|Mastercard-Nummer|Karteninhaber|Abrechnung", line):
                 last["counterparty"] = (last["counterparty"] + " " + line.strip()).strip()
     total = sum((r["amount"] for r in rows), Decimal(0))
-    balance = RE_CARD_BALANCE.search(txt)
-    check = {"file": Path(source).name, "n": len(rows), "sum": total}
-    if balance:
+    balance, period = RE_CARD_BALANCE.search(txt), RE_CARD_PERIOD.search(txt)
+    check = {"file": Path(source).name, "n": len(rows), "sum": total,
+             "periods": [(after(iso(period.group(1))), iso(period.group(2)))] if period else []}
+    if balance:                          # the new balance is charged to the paying account in full
         b = dec(balance.group(1)) * (Decimal(-1) if balance.group(2) == "-" else Decimal(1))
-        check.update(closing=b, difference=b - total, ok=b == total)
+        check.update(closing=b, due=b, difference=b - total, ok=b == total)
     else:
         check.update(ok=False, note="'Neuer Saldo' not found")
     return rows, check
@@ -126,6 +138,9 @@ def parse_haspa_card(pdf: Path, account: str, source: str, ids=()):
 
 
 # ----------------------------------------------------------------- camt.052/053
+ITEM_AMOUNTS = ("d:Amt", "d:AmtDtls/d:TxAmt/d:Amt", "d:AmtDtls/d:InstdAmt/d:Amt")
+
+
 def parse_camt(xml: Path, account: str, source: str, ids=()):
     """Every report in the file must belong to the account (its IBAN among ids) and balance."""
     root = ET.parse(xml).getroot()
@@ -141,46 +156,80 @@ def parse_camt(xml: Path, account: str, source: str, ids=()):
         rows += found
         checks.append(check)
     if not checks:
-        return [], {"file": xml.name, "n": 0, "ok": False, "note": "no camt report found"}
+        return [], {"file": xml.name, "n": 0, "ok": False, "periods": [], "note": "no camt report found"}
     if len(checks) == 1:
         return rows, {**checks[0], "file": xml.name}
     failed = [c for c in checks if not c["ok"]]
     return rows, {"file": xml.name, "n": len(rows), "ok": not failed,
+                  "periods": [p for c in checks for p in c["periods"]],
                   "note": f"{len(checks)} reports" + (f", {len(failed)} failed: {failed[0].get('note', 'balances')}"
                                                       if failed else "")}
 
 
 def camt_report(report, q, account: str, source: str):
-    balances = {}
+    balances, dates = {}, {}
     for b in report.findall("d:Bal", q):
-        amount = Decimal(b.find("d:Amt", q).text)
-        balances[b.find(".//d:Cd", q).text] = amount if b.find("d:CdtDbtInd", q).text == "CRDT" else -amount
+        code, amount = b.find(".//d:Cd", q).text, Decimal(b.find("d:Amt", q).text)
+        balances[code] = amount if b.find("d:CdtDbtInd", q).text == "CRDT" else -amount
+        day = b.find("d:Dt/d:Dt", q) if b.find("d:Dt/d:Dt", q) is not None else b.find("d:Dt/d:DtTm", q)
+        if day is not None and day.text:
+            dates[code] = day.text[:10]
     rows = []
     for e in report.findall("d:Ntry", q):
-        amount = Decimal(e.find("d:Amt", q).text)
-        if e.find("d:CdtDbtInd", q).text == "DBIT":
-            amount = -amount
-        details = e.find(".//d:TxDtls", q)
-        counterparty = ""
-        if details is not None:
-            party = "Cdtr" if amount < 0 else "Dbtr"
-            nm = details.find(f".//d:RltdPties/d:{party}/d:Pty/d:Nm", q)
-            if nm is None:
-                nm = details.find(f".//d:RltdPties/d:{party}/d:Nm", q)
-            if nm is None:
-                nm = details.find(".//d:Nm", q)
-            counterparty = nm.text if nm is not None and nm.text else ""
-        ref, value = e.find(".//d:AcctSvcrRef", q), e.find(".//d:ValDt/d:Dt", q)
-        code = e.find(".//d:Prtry/d:Cd", q)
-        rows.append({**row(account, e.find(".//d:BookgDt/d:Dt", q).text[:10],
-                           value.text[:10] if value is not None else None, amount, counterparty,
-                           " ".join(u.text for u in e.findall(".//d:Ustrd", q) if u.text),
-                           code.text if code is not None else "", "camt", source,
-                           ref.text if ref is not None and ref.text else ""),
-                     "currency": e.find("d:Amt", q).get("Ccy", "EUR")})
+        value, code = e.find(".//d:ValDt/d:Dt", q), e.find(".//d:Prtry/d:Cd", q)
+        for amount, item, scope, note in camt_items(e, q):
+            ref = scope.find(".//d:AcctSvcrRef", q)
+            if ref is None and scope is not e:
+                ref = e.find("d:AcctSvcrRef", q)
+            text = note + " ".join(u.text for u in scope.findall(".//d:Ustrd", q) if u.text)
+            rows.append({**row(account, e.find(".//d:BookgDt/d:Dt", q).text[:10],
+                               value.text[:10] if value is not None else None, amount, party(item, amount, q), text,
+                               code.text if code is not None else "", "camt", source,
+                               ref.text if ref is not None and ref.text else ""),
+                         "currency": e.find("d:Amt", q).get("Ccy", "EUR")})
     total = sum((r["amount"] for r in rows), Decimal(0))
     start = balances.get("OPBD", balances.get("PRCD", Decimal(0)))
     end = balances.get("CLBD")
+    span = (report.find("d:FrToDt/d:FrDtTm", q), report.find("d:FrToDt/d:ToDtTm", q))
+    if None not in span:                                    # the period the report states
+        period = (span[0].text[:10], span[1].text[:10])
+    else:                                                   # else its opening (or last closing) and closing balance
+        first = dates.get("OPBD") or (after(dates["PRCD"]) if "PRCD" in dates else None)
+        period = (first, dates["CLBD"]) if first and "CLBD" in dates else None
     return rows, {"file": "", "n": len(rows), "opening": start, "closing": end, "sum": total,
                   "difference": end - (start + total) if end is not None else None,
-                  "ok": end is not None and start + total == end}
+                  "ok": end is not None and start + total == end, "periods": [period] if period else []}
+
+
+def camt_items(e, q):
+    """(amount, item, scope, note) for each booking of an entry: item names the counterparty, scope holds
+    text and reference. A batch entry is split only where every item states an amount and the amounts add
+    up to the entry; otherwise it stays one booking, marked as not itemized."""
+    debit = e.find("d:CdtDbtInd", q).text == "DBIT"
+    amount = Decimal(e.find("d:Amt", q).text) * (-1 if debit else 1)
+    items = e.findall(".//d:TxDtls", q)
+    if len(items) < 2:
+        return [(amount, items[0] if items else None, e, "")]
+    parts = []
+    for t in items:
+        found = [x for x in (t.find(p, q) for p in ITEM_AMOUNTS) if x is not None]
+        if not found:
+            break
+        ind = t.find("d:CdtDbtInd", q)
+        parts.append(Decimal(found[0].text) * (-1 if (ind.text == "DBIT" if ind is not None else debit) else 1))
+    if len(parts) == len(items) and sum(parts) == amount:
+        return [(p, t, t, "") for p, t in zip(parts, items)]
+    return [(amount, None, e, f"batch of {len(items)}, not itemized: ")]
+
+
+def party(item, amount, q) -> str:
+    """The other party of a booking: the creditor of a debit, the debtor of a credit."""
+    if item is None:
+        return ""
+    side = "Cdtr" if amount < 0 else "Dbtr"
+    nm = item.find(f".//d:RltdPties/d:{side}/d:Pty/d:Nm", q)
+    if nm is None:
+        nm = item.find(f".//d:RltdPties/d:{side}/d:Nm", q)
+    if nm is None:
+        nm = item.find(".//d:Nm", q)
+    return nm.text if nm is not None and nm.text else ""
